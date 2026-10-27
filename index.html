@@ -2,96 +2,199 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport"
-        content="width=device-width, initial-scale=1, viewport-fit=cover">
 
-  <title>圖卡 AR 學習平台</title>
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1, viewport-fit=cover"
+  >
+
+  <title>臺灣地形 AR 學習平台</title>
 
   <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
 
   <style>
-    html, body {
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
       margin: 0;
       width: 100%;
       height: 100%;
       overflow: hidden;
-      font-family: sans-serif;
+      font-family:
+        "Microsoft JhengHei",
+        "PingFang TC",
+        sans-serif;
       background: transparent;
     }
 
     #panel {
       position: fixed;
-      top: 16px;
-      left: 16px;
-      right: 16px;
+      top: max(12px, env(safe-area-inset-top));
+      left: 12px;
+      right: 12px;
       z-index: 100;
-      padding: 16px;
-      border-radius: 16px;
+      max-width: 520px;
+      margin: 0 auto;
+      padding: 18px;
+      border-radius: 18px;
       background: rgba(255, 255, 255, 0.94);
-      box-shadow: 0 4px 20px #0002;
+      box-shadow: 0 5px 24px rgba(0, 0, 0, 0.14);
     }
 
     h1 {
-      margin: 0 0 8px;
-      font-size: 21px;
+      margin: 0 0 10px;
+      color: #174b3d;
+      font-size: 23px;
     }
 
     #status {
-      margin: 8px 0 12px;
-      line-height: 1.6;
-      font-size: 15px;
+      margin: 0 0 14px;
+      color: #333;
+      line-height: 1.7;
+      font-size: 16px;
+      overflow-wrap: anywhere;
     }
 
     button {
-      padding: 12px 20px;
       border: 0;
       border-radius: 10px;
+      padding: 12px 18px;
       background: #176b57;
       color: white;
+      font-family: inherit;
       font-size: 17px;
+      cursor: pointer;
+      touch-action: manipulation;
     }
 
     button:disabled {
-      background: #888;
+      background: #929995;
+      cursor: default;
+    }
+
+    [hidden] {
+      display: none !important;
     }
 
     .hint {
-      margin-top: 10px;
+      margin: 12px 0 0;
+      color: #626262;
       font-size: 13px;
-      color: #555;
+      line-height: 1.7;
+    }
+
+    #controls {
+      position: fixed;
+      bottom: max(18px, env(safe-area-inset-bottom));
+      left: 12px;
+      right: 12px;
+      z-index: 100;
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    #controls button {
+      background: rgba(23, 75, 61, 0.94);
+      box-shadow: 0 3px 12px #0002;
     }
   </style>
 
   <script>
-    // 自動縮放並置中模型。
-    // 模型最長邊會縮放為辨識圖卡寬度的約 0.8 倍。
     AFRAME.registerComponent('fit-model', {
       init: function () {
         this.el.addEventListener('model-loaded', () => {
-          const model = this.el.getObject3D('mesh');
-          const THREE = AFRAME.THREE;
+          try {
+            const model = this.el.getObject3D('mesh');
+            const THREE = AFRAME.THREE;
 
-          model.updateMatrixWorld(true);
+            if (!model) {
+              throw new Error('未取得模型物件。');
+            }
 
-          const box = new THREE.Box3().setFromObject(model);
-          const size = box.getSize(new THREE.Vector3());
-          const center = box.getCenter(new THREE.Vector3());
-          const longest = Math.max(size.x, size.y, size.z);
+            // 排除這份 GLB 中遺留的預設立方體。
+            const unwanted = [];
 
-          if (!Number.isFinite(longest) || longest <= 0) {
-            window.dispatchEvent(new Event('invalid-model'));
-            return;
+            model.traverse((object) => {
+              if (object.name === 'Cube') {
+                unwanted.push(object);
+              }
+            });
+
+            unwanted.forEach((object) => {
+              if (object.parent) {
+                object.parent.remove(object);
+              }
+            });
+
+            // 在 AR 場景外測量模型，
+            // 避免受到 AR 上層物件的縮放影響。
+            const measuringModel = model.clone(true);
+            measuringModel.updateWorldMatrix(true, true);
+
+            const box = new THREE.Box3().setFromObject(
+              measuringModel
+            );
+
+            if (box.isEmpty()) {
+              throw new Error('模型中沒有可顯示的網格。');
+            }
+
+            const size = box.getSize(
+              new THREE.Vector3()
+            );
+
+            const center = box.getCenter(
+              new THREE.Vector3()
+            );
+
+            const longest = Math.max(
+              size.x,
+              size.y,
+              size.z
+            );
+
+            if (
+              !Number.isFinite(longest) ||
+              longest <= 0
+            ) {
+              throw new Error('無法計算模型的有效尺寸。');
+            }
+
+            // 模型最長邊 = 圖卡寬度的 0.9 倍。
+            const scale = 0.9 / longest;
+
+            model.position.multiplyScalar(scale);
+            model.position.sub(
+              center.multiplyScalar(scale)
+            );
+
+            model.scale.multiplyScalar(scale);
+
+            model.updateMatrix();
+            model.updateWorldMatrix(true, true);
+
+            // 保存狀態，避免模型快取載入時錯過事件。
+            this.el.dataset.fitReady = 'true';
+            this.el.emit('fit-ready', {}, false);
+
+          } catch (error) {
+            console.error('模型尺寸處理失敗：', error);
+
+            this.el.dataset.fitError = error.message;
+
+            this.el.emit(
+              'fit-error',
+              { message: error.message },
+              false
+            );
           }
-
-          const scale = 0.8 / longest;
-
-          // 調整 mesh，保留外層實體供之後旋轉使用。
-          model.scale.multiplyScalar(scale);
-          model.position.sub(center.multiplyScalar(scale));
-          model.updateMatrixWorld(true);
-
-          window.dispatchEvent(new Event('model-ready'));
         });
       }
     });
@@ -100,16 +203,27 @@
 
 <body>
   <div id="panel">
-    <h1>圖卡 AR 學習平台</h1>
+    <h1>臺灣地形 AR 學習平台</h1>
 
-    <div id="status">正在載入 3D 模型……</div>
-
-    <button id="start" disabled>載入中</button>
-
-    <div class="hint">
-      啟動後，請將後鏡頭對準指定圖卡。
-      移動手機，可以從不同角度觀察模型。
+    <div id="status" role="status" aria-live="polite">
+      正在載入臺灣地形模型……
     </div>
+
+    <button id="start" type="button" disabled>
+      載入中
+    </button>
+
+    <p class="hint">
+      啟動鏡頭後，請對準老師指定的完整圖卡。
+      辨識成功後，可以移動手機觀察立體地形。
+    </p>
+  </div>
+
+  <div id="controls" hidden>
+    <button id="smaller" type="button">縮小</button>
+    <button id="larger" type="button">放大</button>
+    <button id="rotate" type="button">旋轉</button>
+    <button id="reset" type="button">重設</button>
   </div>
 
   <a-scene
@@ -120,9 +234,13 @@
       uiScanning: no;
       uiError: no;
     "
-    renderer="colorManagement: true; alpha: true"
+    renderer="
+      colorManagement: true;
+      alpha: true;
+    "
     vr-mode-ui="enabled: false"
     device-orientation-permission-ui="enabled: false"
+    loading-screen="enabled: false"
   >
     <a-camera
       position="0 0 0"
@@ -142,19 +260,24 @@
       id="target"
       mindar-image-target="targetIndex: 0"
     >
-      <!--
-        rotation 可依模型調整，例如：
-        0 0 0
-        90 0 0
-        -90 0 0
-      -->
+      <!-- 操作縮放與旋轉的外層 -->
       <a-entity
-        id="model"
-        gltf-model="url(./model.glb)"
-        fit-model
-        position="0 0 0.15"
+        id="modelContainer"
+        position="0 0 0.03"
         rotation="0 0 0"
-      ></a-entity>
+        scale="1 1 1"
+      >
+        <!--
+          臺灣地形沿 XZ 平面展開。
+          旋轉 90 度，讓地圖貼齊辨識圖卡。
+        -->
+        <a-entity
+          id="model"
+          gltf-model="url(./model.glb)"
+          fit-model
+          rotation="90 0 0"
+        ></a-entity>
+      </a-entity>
     </a-entity>
   </a-scene>
 
@@ -162,90 +285,273 @@
     const scene = document.querySelector('a-scene');
     const target = document.querySelector('#target');
     const model = document.querySelector('#model');
-    const start = document.querySelector('#start');
-    const status = document.querySelector('#status');
 
-    let modelReady = false;
+    const modelContainer = document.querySelector(
+      '#modelContainer'
+    );
+
+    const startButton = document.querySelector('#start');
+    const statusText = document.querySelector('#status');
+    const controls = document.querySelector('#controls');
+
     let sceneReady = scene.hasLoaded;
+    let modelReady = false;
+    let failed = false;
     let starting = false;
+    let running = false;
 
-    function updateButton() {
-      if (modelReady && sceneReady) {
-        start.disabled = false;
-        start.textContent = '啟動 AR 鏡頭';
-        status.textContent = '模型已載入，請按下按鈕開始。';
+    let displayScale = 1;
+    let displayAngle = 0;
+
+    function setStatus(message) {
+      statusText.textContent = message;
+    }
+
+    function updateReadyState() {
+      if (failed || starting || running) {
+        return;
       }
+
+      if (sceneReady && modelReady) {
+        startButton.disabled = false;
+        startButton.textContent = '啟動 AR 鏡頭';
+
+        setStatus(
+          '臺灣地形模型已載入，請點選按鈕啟動鏡頭。'
+        );
+      }
+    }
+
+    function failModel(message) {
+      failed = true;
+      startButton.disabled = true;
+      startButton.textContent = '模型載入失敗';
+      setStatus(message);
     }
 
     scene.addEventListener('loaded', () => {
       sceneReady = true;
-      updateButton();
+      updateReadyState();
     });
 
-    window.addEventListener('model-ready', () => {
+    model.addEventListener('fit-ready', () => {
       modelReady = true;
-      updateButton();
+      updateReadyState();
     });
 
-    window.addEventListener('invalid-model', () => {
-      status.textContent = '模型沒有可顯示的有效尺寸，請檢查 GLB 檔案。';
+    model.addEventListener('fit-error', (event) => {
+      failModel(
+        '模型處理失敗：' +
+        event.detail.message +
+        ' 請確認已使用這份完整新版程式。'
+      );
     });
 
-    model.addEventListener('model-error', () => {
-      status.textContent =
-        '模型載入失敗。請確認 model.glb 與 index.html 在同一資料夾，'
-        + '並檢查模型是否包含材質及貼圖。';
+    model.addEventListener('model-error', (event) => {
+      console.error('GLB 載入失敗：', event.detail);
+
+      failModel(
+        '無法載入 model.glb。請確認檔名大小寫正確，' +
+        '並且與 index.html 放在同一資料夾。'
+      );
     });
 
-    function showCameraError(error) {
-      console.error(error);
-      status.textContent =
-        'AR 啟動失敗：請確認已允許相機權限、使用 HTTPS 網址，'
-        + '並檢查 targets.mind 是否存在。修正後重新整理頁面。';
-
-      start.disabled = true;
-      start.textContent = '請重新整理後再試';
+    // 處理模型已經先完成載入的情況。
+    if (model.dataset.fitReady === 'true') {
+      modelReady = true;
     }
 
-    scene.addEventListener('arError', showCameraError);
+    if (model.dataset.fitError) {
+      failModel(
+        '模型處理失敗：' + model.dataset.fitError
+      );
+    }
 
-    start.addEventListener('click', async () => {
-      if (starting) return;
+    updateReadyState();
 
-      if (!window.isSecureContext ||
-          !navigator.mediaDevices?.getUserMedia) {
-        status.textContent =
-          '目前無法使用相機，請用手機瀏覽器開啟 HTTPS 網址。';
+    function cameraErrorMessage(error) {
+      const name = error?.name || '';
+
+      if (name === 'NotAllowedError') {
+        return (
+          '相機權限未開啟。請允許此網站使用相機，' +
+          '再重新整理頁面。'
+        );
+      }
+
+      if (name === 'NotFoundError') {
+        return '找不到可用的相機，請使用有鏡頭的手機。';
+      }
+
+      if (name === 'NotReadableError') {
+        return (
+          '相機目前無法使用。請關閉其他使用相機的程式，' +
+          '再重新整理頁面。'
+        );
+      }
+
+      return (
+        'AR 啟動失敗。請確認相機權限已開啟，' +
+        '且 targets.mind 與 index.html 放在同一資料夾。' +
+        '修正後請重新整理頁面。'
+      );
+    }
+
+    function failAR(error) {
+      console.error('AR 啟動失敗：', error);
+
+      failed = true;
+      running = false;
+      starting = false;
+
+      controls.hidden = true;
+
+      startButton.hidden = false;
+      startButton.disabled = true;
+      startButton.textContent = '請重新整理後再試';
+
+      setStatus(cameraErrorMessage(error));
+
+      // 停止可能已經啟動的鏡頭。
+      try {
+        const ar = scene.systems['mindar-image-system'];
+        if (ar) ar.stop();
+      } catch (stopError) {
+        console.warn(stopError);
+      }
+    }
+
+    scene.addEventListener('arError', (event) => {
+      failAR(event.detail?.error || event.detail || event);
+    });
+
+    scene.addEventListener('arReady', () => {
+      if (failed) return;
+
+      starting = false;
+      running = true;
+
+      startButton.hidden = true;
+      controls.hidden = false;
+
+      setStatus(
+        '鏡頭已啟動，請對準老師指定的完整圖卡。'
+      );
+    });
+
+    startButton.addEventListener('click', async () => {
+      if (
+        failed ||
+        starting ||
+        running ||
+        !sceneReady ||
+        !modelReady
+      ) {
+        return;
+      }
+
+      if (
+        !window.isSecureContext ||
+        !navigator.mediaDevices?.getUserMedia
+      ) {
+        setStatus(
+          '目前無法使用相機。請用手機的 Safari 或 Chrome，' +
+          '開啟 GitHub Pages 的 HTTPS 網址。'
+        );
         return;
       }
 
       starting = true;
-      start.disabled = true;
-      start.textContent = '啟動中';
-      status.textContent = '正在啟動鏡頭，請允許相機權限……';
+      startButton.disabled = true;
+      startButton.textContent = '啟動中';
+
+      setStatus(
+        '正在啟動鏡頭，若出現權限詢問，請選擇「允許」。'
+      );
 
       try {
         const ar = scene.systems['mindar-image-system'];
+
+        if (!ar) {
+          throw new Error('AR 系統尚未就緒。');
+        }
+
         await ar.start();
 
-        start.hidden = true;
-        status.textContent = '請將鏡頭對準完整圖卡。';
       } catch (error) {
-        showCameraError(error);
+        failAR(error);
       }
     });
 
     target.addEventListener('targetFound', () => {
-      status.textContent = '辨識成功！請移動手機觀察 3D 模型。';
+      if (failed) return;
+
+      setStatus(
+        '辨識成功！請移動手機，從不同角度觀察臺灣地形。'
+      );
     });
 
     target.addEventListener('targetLost', () => {
-      status.textContent = '圖卡離開鏡頭，請重新對準圖卡。';
+      if (!running || failed) return;
+
+      setStatus(
+        '圖卡離開鏡頭，請重新對準完整圖卡。'
+      );
     });
 
+    function updateModelDisplay() {
+      modelContainer.setAttribute(
+        'scale',
+        `${displayScale} ${displayScale} ${displayScale}`
+      );
+
+      // 沿圖卡法線旋轉，維持地圖貼齊圖卡。
+      modelContainer.setAttribute(
+        'rotation',
+        `0 0 ${displayAngle}`
+      );
+    }
+
+    document.querySelector('#smaller')
+      .addEventListener('click', () => {
+        displayScale = Math.max(
+          0.3,
+          displayScale / 1.2
+        );
+
+        updateModelDisplay();
+      });
+
+    document.querySelector('#larger')
+      .addEventListener('click', () => {
+        displayScale = Math.min(
+          3,
+          displayScale * 1.2
+        );
+
+        updateModelDisplay();
+      });
+
+    document.querySelector('#rotate')
+      .addEventListener('click', () => {
+        displayAngle = (displayAngle + 30) % 360;
+        updateModelDisplay();
+      });
+
+    document.querySelector('#reset')
+      .addEventListener('click', () => {
+        displayScale = 1;
+        displayAngle = 0;
+        updateModelDisplay();
+      });
+
     window.addEventListener('pagehide', () => {
-      const ar = scene.systems['mindar-image-system'];
-      if (ar) ar.stop();
+      try {
+        const ar = scene.systems['mindar-image-system'];
+        if (ar) ar.stop();
+      } catch (error) {
+        console.warn(error);
+      }
     });
   </script>
 </body>
